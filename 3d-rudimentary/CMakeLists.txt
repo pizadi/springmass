@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.10)
+if(POLICY CMP0072)
+    cmake_policy(SET CMP0072 NEW)
+endif()
+project(SpringMass VERSION 1.0)
+
+find_package(OpenGL REQUIRED)
+find_package(GLUT REQUIRED)
+include_directories(${OPENGL_INCLUDE_DIRS})
+include_directories(${GLUT_INCLUDE_DIRS})
+add_executable(springmass.out objspring3d.cpp) 
+target_link_libraries(springmass.out OpenGL::OpenGL GLUT::GLUT OpenGL::GLU)
