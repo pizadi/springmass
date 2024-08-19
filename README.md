@@ -12,4 +12,4 @@ A 3-d implementation which does not use eigen. You can control the perspective b
 
 ## 3D Implementation with Eigen
 
-A 3-d implementation with Eigen. You can control the perspective with IJKL keys.
+A 3-d implementation with Eigen which reads mass and spring data from csv files. You can control the perspective with IJKL keys.

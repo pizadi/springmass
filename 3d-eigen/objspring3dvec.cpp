@@ -5,32 +5,37 @@
 #include <GL/glut.h>
 #include <GL/freeglut_ext.h>
 #include <cmath>
+#include <csignal>
 #include <ctime>
 #include <eigen3/Eigen/Core>
 #include <eigen3/Eigen/src/Core/Matrix.h>
 #include <cstdlib>
 #include <cstdio>
 #include <chrono>
+#include <fstream>
+#include <sstream>
+#include <string>
 
 #define PI 3.14159
-#define N 5
-#define M 9
-#define DAMPENING 1e-5
+#define DAMP 1e-5
 #define CAMSPEED 1e-1
 #define DIST 3
 
 using namespace Eigen;
 using namespace std;
 
-// std::vector<Body> bodies;
-// std::vector<Spring> springs;
+int N, M;
+
 VectorXd xpre;
 MatrixXd A, f, Ai, colors;
 auto t = std::chrono::high_resolution_clock::now();
-MatrixXi connect = MatrixXi(M, 2);
-VectorXd lrest = VectorXd::Zero(M), k = VectorXd::Zero(M), y = VectorXd(6*N), mass = VectorXd::Zero(N), dof = VectorXd::Ones(3*N);
-Vector3f ccomp = Vector3f(1., 0., 0.), cstr = Vector3f(0., 0., 1.), cntr = Vector3f(1., 1., 1.);
-MatrixXd QtS = MatrixXd::Zero(3 * M, 3 * N), StL = MatrixXd::Zero(M, 3 * M), LtS, StQ;
+MatrixXi connect; // Spring connections
+VectorXd lrest, k, y, mass, dof; // System variables
+
+
+Vector3f ccomp = Vector3f(1., 0., 0.), cstr = Vector3f(0., 0., 1.), cntr = Vector3f(1., 1., 1.); // Color vectors
+MatrixXd QtS, StL, LtS, StQ; // Conversion matrices
+
 
 float theta = PI / 2, phi = 0;
 
@@ -82,6 +87,122 @@ VectorXd gradient(VectorXd y) {
     return out;
 }
 
+void readPos() {
+    ifstream file("pos.csv");
+    string line;
+    vector<double> positions_v;
+    
+    if (!file) {
+        printf("Could not open pos.csv file.\n");
+        raise(SIGKILL);
+    }
+
+    while (getline(file, line)) {
+        stringstream lineStream(line);
+        string cell;
+        vector<double> row;
+
+        while (getline(lineStream, cell, ',')) {
+            positions_v.push_back(stod(cell));
+        }
+    }
+
+    if (positions_v.size() % 3 != 0) {
+        printf("Invalid pos.csv file.\n");
+        raise(SIGKILL);
+    }
+    N = positions_v.size() / 3;
+    y = VectorXd(6*N);
+    mass = VectorXd::Zero(N);
+    dof = VectorXd::Ones(3*N);
+    for (int i = 0; i < 3 * N; i++) {
+        y(i) = positions_v[i];
+    }
+}
+
+void readMass() {
+    ifstream file("mass.csv");
+    string line;
+    vector<double> mass_v;
+    
+    if (!file) {
+        printf("Could not open mass.csv file.\n");
+        raise(SIGKILL);
+    }
+
+    while (getline(file, line)) {
+        mass_v.push_back(stod(line));
+    }
+
+    if (mass_v.size() != N) {
+        printf("Invalid mass.csv file.\n");
+        raise(SIGKILL);
+    }
+
+    mass = VectorXd::Zero(N);
+
+    for (int i = 0; i < N; i++) {
+        mass(i) = mass_v[i];
+    }
+}
+
+void readSprings() {
+    ifstream file("springk.csv");
+    string line;
+    vector<int> connections_v;
+    vector<double> k_v;
+    
+    if (!file) {
+        printf("Could not open springk.csv file.\n");
+        raise(SIGKILL);
+    }
+
+    while (getline(file, line)) {
+        stringstream lineStream(line);
+        string cell;
+        vector<double> row;
+
+        getline(lineStream, cell, ',');
+        connections_v.push_back(stoi(cell));
+        getline(lineStream, cell, ',');
+        connections_v.push_back(stoi(cell));
+        getline(lineStream, cell);
+        k_v.push_back(stod(cell));
+    }
+
+    if (connections_v.size() % 2 != 0) {
+        printf("Invalid springk.csv file.\n");
+        raise(SIGKILL);
+    }
+    M = connections_v.size() / 2;
+
+    lrest = VectorXd::Zero(M);
+    k = VectorXd::Zero(M);
+    connect = MatrixXi(M, 2);
+
+    for (int i = 0; i < M; i++) {
+        if (connections_v[2*i] >= N || connections_v[2*i+1] >= N) {
+            printf("Invalid index in springk.csv file.");
+            raise(SIGKILL);
+        }
+        connect(i,0) = connections_v[2*i];
+        connect(i,1) = connections_v[2*i+1];
+        k(i) = k_v[i];
+    }
+
+    for (int i = 0; i < M; i++){
+        lrest(i) = (y.block(3*connect(i,0), 0, 3, 1) - y.block(3*connect(i,1), 0, 3, 1)).norm() * .8;
+    }
+}
+
+void readInfo() {
+    readPos();
+    readMass();
+    readSprings();
+    QtS = MatrixXd::Zero(3 * M, 3 * N), StL = MatrixXd::Zero(M, 3 * M);
+
+}
+
 void init(){
     glClearColor(0., 0., 0., 1.);
     glEnable(GL_DEPTH_TEST);
@@ -91,35 +212,11 @@ void init(){
     glMatrixMode(GL_MODELVIEW);
 
     srand(time(NULL));
-    // building f
-    connect <<  0, 1,
-                0, 2,
-                0, 3,
-                1, 2,
-                2, 3,
-                3, 1,
-                1, 4,
-                2, 4,
-                3, 4;
-
-    k.array() = 1e3;
-
-    mass.array() = 1;
-
-    y.block(0, 0, 3*N, 1) << 
-                            0, .5, 0,
-                            -.42, 0, -.25,
-                            0, 0, .5,
-                            .42, 0, -.25,
-                            0, -.5, 0;
+    readInfo();
 
     y.block(3*N, 0, 3*N, 1) = VectorXd::Random(3 * N);
     y.block(3*N,0,3*N,1) = 1e-1 * y.block(3*N,0,3*N,1);
 
-    for (int i = 0; i < M; i++) {
-        lrest(i) = (y.block(3*connect(i,0), 0, 3, 1) - y.block(3*connect(i,1), 0, 3, 1)).norm() * .8;
-    }
-    
     for (int i = 0; i < M; i++) {
         QtS.block(3 * i, 3 * (connect(i, 1)), 3, 3) = Matrix3d::Identity();
         QtS.block(3 * i, 3 * (connect(i, 0)), 3, 3) = - Matrix3d::Identity();
@@ -177,7 +274,7 @@ void idle() {
     VectorXd y4 = gradient(y + dt * y3);
     y = y + dt / 6 * (y1 + 2 * y2 + 2 * y3 + y4);
 
-    y.block(3*N, 0, 3*N, 1) = exp(- dt * DAMPENING) * y.block(3*N, 0, 3*N, 1);
+    y.block(3*N, 0, 3*N, 1) = exp(- dt * DAMP) * y.block(3*N, 0, 3*N, 1);
     
     glutPostRedisplay();
 }
